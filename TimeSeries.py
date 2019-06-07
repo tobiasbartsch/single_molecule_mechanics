@@ -13,6 +13,7 @@ import datashader as ds
 from single_molecule_mechanics.ProteinModels import xSeriesWLCe
 import warnings
 from collections import OrderedDict 
+from multiprocessing import Pool
 
 
 class TimeSeriesLoader():
@@ -640,6 +641,40 @@ class ForceRampHandler(object):
             fit_pulls.append(segfit_one_pull)
         
         return (dLc_vs_F, lcs_all_pulls, lps_all_pulls, Ks_all_pulls, fit_pulls)
+
+    def fitAllPullsWithWLCs_parallel(self, numprocesses, pulls, numsdevs=3, force_threshold=3e-12):
+
+        with Pool(numprocesses) as p:
+            (lcs_all_pulls, lps_all_pulls, Ks_all_pulls, dLc_vs_F_all_pulls, fit_pulls) = p.map(_processOnePull, pulls)
+            
+        return (lcs_all_pulls, lps_all_pulls, Ks_all_pulls, dLc_vs_F_all_pulls, fit_pulls)
+
+    def _processOnePull(self, pull, numsdevs=3, force_threshold=3e-12):
+        (steps_start, steps_end) = self._detectConfChange(pull[:,1], pull[:,0], pull=True, numsdevs=numsdevs, force_threshold=force_threshold, window=1000)
+        segments = self._confChangeToSegments(steps_start, steps_end, pull[:,1], pull[:,0])
+        lcs_one_pull = []
+        lps_one_pull = []
+        Ks_one_pull = []
+        dLc_vs_F_one_pull = []
+        Fmaxs_one_pull = [] #maximum force at the end of each segment (i.e. the forces at which a rip happened)
+        segfit_one_pull =[]
+        for seg in segments:
+            (params, params_cov, seg_fit, fitfailed) = self._fitSeriesWLCs(seg, lps = [0.5e-9, 4e-9], lcs = [37e-9, 50e-9], Ks=[7.2e-3*37e-9, 7.2e-3*37e-9], holdconst= [True, False, True, False, True, False])
+            if (fitfailed): #curve fit failed
+                continue
+            lcs_one_pull.append(params[3])
+            lps_one_pull.append(params[1])
+            Ks_one_pull.append(params[5])
+            Fmaxs_one_pull.append(np.max(seg.values))
+            segfit_one_pull.append(seg_fit)
+        if(len(lcs_one_pull) > 1):
+            #conformational change detected
+            dLcs = np.diff(lcs_one_pull)
+            for dLc, F in zip(dLcs, Fmaxs_one_pull):
+                dLc_vs_F_one_pull.append([F, dLc])
+        
+        return (lcs_one_pull, lps_one_pull, Ks_one_pull, dLc_vs_F_one_pull, segfit_one_pull)
+
 
     def _detectConfChange(self, forcewave, extensionwave, pull=True, numsdevs=3, force_threshold=3e-12, window=1000):
         '''Runs a statistical test to determine conformational changes in the extension wave. Only considers data for which the force is larger than force_threshold.
