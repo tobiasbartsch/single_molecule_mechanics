@@ -3,12 +3,17 @@ import numpy as np
 import xarray as xr
 import nptdms
 import plotly.graph_objs as go
-from scipy.optimize import leastsq
-import holoviews as hv
+from scipy.optimize import curve_fit, leastsq
+from scipy.stats import ttest_ind
 from scipy.signal import savgol_filter
+import holoviews as hv
 import holoviews.operation.datashader as hd
 hd.shade.cmap=["lightblue", "darkblue"]
 import datashader as ds
+from single_molecule_mechanics.ProteinModels import xSeriesWLCe
+import warnings
+from collections import OrderedDict 
+
 
 class TimeSeriesLoader():
     '''Provides data structures and methods to analyze single-molecule data.'''
@@ -537,36 +542,230 @@ class ForceRampHandler(object):
         self.pulls = np.stack((extension_pulls, force_pulls), axis=2)
         self.releases = np.stack((extension_releases, force_releases), axis=2)
 
-    def LayoutOfCycles(self, start, stop):
+    @property
+    def pullsXr(self):
+        '''Return a list of xarray.DataArray objects for all pulls'''
+        pulls = []
+        for pull in self.pulls:
+            pullArray = xr.DataArray(pull[:,1],
+                                    dims=['extension'],
+                                    coords = {'extension': pull[:,0]},
+                                    name='force')
+            pulls.append(pullArray)
+        return pulls
+
+    @property
+    def releasesXr(self):
+        '''Return a list of xarray.DataArray objects for all pulls'''
+        releases = []
+        for release in self.releases:
+            releaseArray = xr.DataArray(release[:,1],
+                                    dims=['extension'],
+                                    coords = {'extension': release[:,0]},
+                                    name='force')
+            releases.append(releaseArray)
+        return releases
+
+    def LayoutOfCycles(self, start, stop, fits_pulls = None, fits_releases = None):
         '''Return a holoviews layout of force-extension cycles.
 
         Args:
-            start (int): number of first cycle in layout
-            stop (int): number of last cycle in layout
+            start (int): number of first cycle in layout.
+            stop (int): number of last cycle in layout.
+            fits_pulls (list of lists of xr.DataArray): outer list: cycle, inner list: segment within cycle.
+            fits_releases (list of lists of xr.DataArray): outer list: cycle, inner list: segment within cycle.
+        Returns:
+            layout (holoviews/matplotlib): layout of cycles.
         '''
 
         all_cycles = hv.Layout()
-        hd.shade.color_key=["red", "blue"]
-
         for cyclenum in np.arange(start, stop):
-            pull = xr.DataArray(self.pulls[cyclenum,:,1],
-                                dims=['extension'],
-                                coords = {'extension': self.pulls[cyclenum,:,0]},
-                                name='force')
-            release = xr.DataArray(self.releases[cyclenum,:,1],
-                                dims=['extension'],
-                                coords = {'extension': self.releases[cyclenum,:,0]},
-                                name='force')
+            pull = self.pullsXr[cyclenum]
+            release = self.releasesXr[cyclenum]
+            
+            currentcycle = OrderedDict()
+            currentcycle['extension'] = hv.Curve(pull).opts(color='red')
+            currentcycle['relaxation'] = hv.Curve(release).opts(color='blue')
+            
+            if (fits_pulls is not None and fits_releases is not None):
+                for i, pullfit in enumerate(fits_pulls[cyclenum]):
+                    currentcycle['fit (pull) ' + str(i)] = hv.Curve(pullfit).opts(color='black', linestyle='dashed')
+                for i, releasefit in enumerate(fits_releases[cyclenum]):
+                    currentcycle['fit (relaxation) ' + str(i)] = hv.Curve(releasefit).opts(color='black', linestyle='dashed')
 
-            currentcycle = {1:hv.Curve(pull), 2:hv.Curve(release) }
-            layout = hv.NdOverlay(currentcycle, kdims='k')
-            cyclelayout = hd.dynspread(hd.datashade(layout, aggregator=ds.count_cat('k'))).opts(xrotation=0, xlim=(0, 200e-9), ylim=(0, 70e-12), xformatter='%.1e',yformatter='%.1e',xlabel='extension (m)', ylabel='force (N)')
-            all_cycles += cyclelayout
+            layout = hv.NdOverlay(currentcycle, kdims='ramp', sort=False).options({'Curve': {'xlim': (0, 200e-9), 'ylim': (0, 70e-12)}})
+            layout.opts(show_legend = False)
+            #cyclelayout = hd.dynspread(hd.datashade(layout, aggregator=ds.count_cat('k'))).opts(xrotation=0, xlim=(0, 200e-9), ylim=(0, 70e-12), xformatter='%.1e',yformatter='%.1e',xlabel='extension (m)', ylabel='force (N)')
+            cyclelayout = layout.opts(xlabel='extension (m)', ylabel='force (N)')
+            all_cycles += cyclelayout          
 
         hd.shade.color_key=None #reset
-
+        hv.extension('matplotlib')
         return all_cycles.cols(4)
 
+    def fitAllPullsWithWLCs(self, pulls, numsdevs=3, force_threshold=3e-12):
+
+        lcs_all_pulls = []
+        lps_all_pulls = []
+        Ks_all_pulls = []
+        dLc_vs_F = []
+        fit_pulls = []
+
+        for (i, pull) in enumerate(pulls):
+            print(i)
+            (steps_start, steps_end) = self._detectConfChange(pull[:,1], pull[:,0], pull=True, numsdevs=numsdevs, force_threshold=force_threshold, window=1000)
+            segments = self._confChangeToSegments(steps_start, steps_end, pull[:,1], pull[:,0])
+            lcs_one_pull = []
+            lps_one_pull = []
+            Ks_one_pull = []
+            Fmaxs_one_pull = [] #maximum force at the end of each segment (i.e. the forces at which a rip happened)
+            segfit_one_pull =[]
+            for seg in segments:
+                (params, params_cov, seg_fit, fitfailed) = self._fitSeriesWLCs(seg, lps = [0.5e-9, 4e-9], lcs = [37e-9, 50e-9], Ks=[7.2e-3*37e-9, 7.2e-3*37e-9], holdconst= [True, False, True, False, True, False])
+                if (fitfailed): #curve fit failed
+                    continue
+                lcs_one_pull.append(params[3])
+                lps_one_pull.append(params[1])
+                Ks_one_pull.append(params[5])
+                Fmaxs_one_pull.append(np.max(seg.values))
+                segfit_one_pull.append(seg_fit)
+            if(len(lcs_one_pull) > 1):
+                #conformational change detected
+                dLcs = np.diff(lcs_one_pull)
+                for dLc, F in zip(dLcs, Fmaxs_one_pull):
+                    dLc_vs_F.append([F, dLc, i])
+            lcs_all_pulls.append(lcs_one_pull)
+            lps_all_pulls.append(lps_one_pull)
+            Ks_all_pulls.append(Ks_one_pull)
+            fit_pulls.append(segfit_one_pull)
+        
+        return (dLc_vs_F, lcs_all_pulls, lps_all_pulls, Ks_all_pulls, fit_pulls)
+
+    def _detectConfChange(self, forcewave, extensionwave, pull=True, numsdevs=3, force_threshold=3e-12, window=1000):
+        '''Runs a statistical test to determine conformational changes in the extension wave. Only considers data for which the force is larger than force_threshold.
+
+            Args:
+                forcewave (np.array): force time trace
+                extensionwave (np.array): extension time trace
+                pull (boolean): Is the provided data a pull or a relaxation?
+                numsdevs (int): identify events if they are this many number of sdevs above noise
+                force_threshold (float): threshold for the force: do not test data with a force smaller than this value 
+                window (int): number of data points to consider for the statistical test.
+        '''
+        if(pull is False): #create waves with monotonically increasing force
+            forcewave = np.flip(forcewave)
+            extensionwave = np.flip(extensionwave)
+        
+        mask = forcewave > force_threshold
+        detected_steps = np.copy(forcewave)
+        detected_steps.fill(0)
+        
+        #where does the ramp start?
+        startindex = np.argmax(mask)
+
+        for index in np.arange(startindex + window, len(extensionwave) - window, 1):
+            mean_before = np.mean(extensionwave[index-window:index])
+            mean_after =  np.mean(extensionwave[index:index+window])
+            sdev_before = np.std(extensionwave[index-window:index])
+            sdev_after = np.std(extensionwave[index:index+window])
+            detected_steps[index] = np.abs(mean_after-mean_before) > numsdevs*(sdev_before+sdev_after)/2
+        
+        #undo the flip:
+        if(pull is False):
+            detected_steps = np.flip(detected_steps)
+
+        #find beginning and end of each transition
+        d_steps = np.diff(detected_steps)
+        steps_start = np.where(d_steps==1)
+        steps_end = np.where(d_steps==-1)
+        return (steps_start, steps_end)
+
+    def _confChangeToSegments(self, steps_start, steps_end, forcewave, extensionwave):
+        '''Return a segmentated representation fo forcewave and extension wave, deliminated by the conformational changes
+
+            Args:
+                steps_start (np.array): detected start indices of conformational changes, output from _detectConfChange
+                steps_end (np.array): detected end indices of conformational changes, output from _detectConfChange
+                forcewave (np.array): force time trace
+                extensionwave (np.array): extension time trace
+            
+            Returns:
+                segments (list): list of xr.DataArray containing the force extension segments.
+        '''
+        _steps_start = np.insert(steps_start, 0, 0) #insert a zero at the beginning of _steps_start
+        _steps_end = np.insert(steps_end, 0, 0)
+        
+        _steps_start = np.append(_steps_start, len(forcewave))
+        _steps_end = np.append(_steps_end, len(forcewave))
+
+        segments = []
+        for start, end in zip(_steps_start[1:], _steps_end[0:-1]):
+            force_segment = forcewave[end:start]
+            extension_segment = extensionwave[end:start]
+            seg = xr.DataArray(force_segment,
+                                dims=['extension'],
+                                coords={'extension': extension_segment},
+                                name='force')
+            segments.append(seg)
+
+        return segments
+
+    def _fitSeriesWLCs(self, forceExtension, lps, lcs, Ks, holdconst):
+        '''Fit force-extension data with a series of WLCs.
+
+        Args:
+            forceExtension (xr.xarray): force extension as an xarray (values: 'force', coords: 'extension')
+            lps (list of float): persistence lengths
+            lcs (list of float): contour lengths
+            Ks (list of float): enthalpic moduli
+            holdconst (list of boolean): which of the parameters to hold constant (in a sequence of [*lps, *lcs, *Ks])
+        '''
+        force = forceExtension.values
+        extension = np.array(forceExtension.coords['extension'])
+        
+        init = [*lps, *lcs, *Ks]
+        #decimate the waves to get 1 ms time resolution
+        if(len(force) > 5000):
+            force_decimated = force[::100]
+            extension_decimated = extension[::100]
+        else: #not enough points to fit
+            warnings.warn("Curve fit failed: not enough points")
+            fitfailed = True
+            return -1, -1, -1, fitfailed
+
+        bounds_upper = []
+        bounds_lower = []
+        #create array of bounds to account for parameters we wish to hold constant:
+        for const, param in zip(holdconst, init):
+            if const:
+                bounds_upper.append(1.001 * param)
+                bounds_lower.append(0.999 * param)
+            else:
+                bounds_upper.append(np.inf)
+                bounds_lower.append(-np.inf)
+
+        bounds = (bounds_lower, bounds_upper)
+
+        try:
+            params, params_cov = curve_fit(self._fit2WLCs, force_decimated, extension_decimated, p0=init, bounds = bounds)
+        except RuntimeError:
+            fitfailed = True
+            return -1, -1, -1, fitfailed
+
+        #generate a fit object and return it
+        fitforce = np.arange(1e-12, 70e-12, 1e-12)
+        fitextension = self._fit2WLCs(fitforce, *params)
+        fitArray = xr.DataArray(fitforce,
+                                dims=['extension'],
+                                coords={'extension': fitextension},
+                                name='force')
+
+        return params, params_cov, fitArray, False
+
+
+    def _fit2WLCs(self, F, lp_anchor, lp_protein, lc_anchor, lc_protein, K_anchor, K_protein):
+
+        return xSeriesWLCe(F, [lp_anchor, lp_protein], [lc_anchor, lc_protein], [K_anchor, K_protein])
 
 
 
