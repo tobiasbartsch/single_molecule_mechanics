@@ -645,7 +645,7 @@ class ForceRampHandler(object):
     def fitAllPullsWithWLCs_parallel(self, numprocesses, pulls, numsdevs=3, force_threshold=3e-12):
 
         with Pool(numprocesses) as p:
-            (lcs_all_pulls, lps_all_pulls, Ks_all_pulls, dLc_vs_F_all_pulls, fit_pulls) = p.map(_processOnePull, pulls)
+            (lcs_all_pulls, lps_all_pulls, Ks_all_pulls, dLc_vs_F_all_pulls, fit_pulls) = p.map(self._processOnePull, pulls)
             
         return (lcs_all_pulls, lps_all_pulls, Ks_all_pulls, dLc_vs_F_all_pulls, fit_pulls)
 
