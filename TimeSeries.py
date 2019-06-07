@@ -14,6 +14,7 @@ from single_molecule_mechanics.ProteinModels import xSeriesWLCe
 import warnings
 from collections import OrderedDict 
 from multiprocessing import Pool
+from functools import partial 
 
 
 class TimeSeriesLoader():
@@ -642,15 +643,16 @@ class ForceRampHandler(object):
         
         return (dLc_vs_F, lcs_all_pulls, lps_all_pulls, Ks_all_pulls, fit_pulls)
 
-    def fitAllPullsWithWLCs_parallel(self, numprocesses, pulls, numsdevs=3, force_threshold=3e-12):
+    def fitAllCyclesWithWLCs_parallel(self, numprocesses, pulls, releases, numsdevs=3, force_threshold=3e-12):
 
         with Pool(numprocesses) as p:
-            (lcs_all_pulls, lps_all_pulls, Ks_all_pulls, dLc_vs_F_all_pulls, fit_pulls) = p.map(self._processOnePull, pulls)
+            result_tuple_pulls = p.map(partial(self._processOneRamp, ispull=True), pulls)
+            result_tuple_releases = p.map(partial(self._processOneRamp, ispull=False), releases)
             
-        return (lcs_all_pulls, lps_all_pulls, Ks_all_pulls, dLc_vs_F_all_pulls, fit_pulls)
+        return (result_tuple_pulls, result_tuple_releases)
 
-    def _processOnePull(self, pull, numsdevs=3, force_threshold=3e-12):
-        (steps_start, steps_end) = self._detectConfChange(pull[:,1], pull[:,0], pull=True, numsdevs=numsdevs, force_threshold=force_threshold, window=1000)
+    def _processOneRamp(self, pull, ispull, numsdevs=3, force_threshold=3e-12):
+        (steps_start, steps_end) = self._detectConfChange(pull[:,1], pull[:,0], pull=ispull, numsdevs=numsdevs, force_threshold=force_threshold, window=1000)
         segments = self._confChangeToSegments(steps_start, steps_end, pull[:,1], pull[:,0])
         lcs_one_pull = []
         lps_one_pull = []
