@@ -15,6 +15,7 @@ import warnings
 from collections import OrderedDict 
 from multiprocessing import Pool
 from functools import partial 
+import tqdm
 
 
 class TimeSeriesLoader():
@@ -579,7 +580,7 @@ class ForceRampHandler(object):
         Returns:
             layout (holoviews/matplotlib): layout of cycles.
         '''
-
+        hv.extension('matplotlib')
         all_cycles = hv.Layout()
         for cyclenum in np.arange(start, stop):
             pull = self.pullsXr[cyclenum]
@@ -602,7 +603,7 @@ class ForceRampHandler(object):
             all_cycles += cyclelayout          
 
         hd.shade.color_key=None #reset
-        hv.extension('matplotlib')
+        
         return all_cycles.cols(4)
 
     def fitAllPullsWithWLCs(self, pulls, numsdevs=3, force_threshold=3e-12):
@@ -643,13 +644,15 @@ class ForceRampHandler(object):
         
         return (dLc_vs_F, lcs_all_pulls, lps_all_pulls, Ks_all_pulls, fit_pulls)
 
-    def fitAllCyclesWithWLCs_parallel(self, numprocesses, pulls, releases, numsdevs=3, force_threshold=3e-12):
-
+    def fitAllCyclesWithWLCs_parallel(self, pulls, releases, numprocesses = 10, numsdevs=3, force_threshold=3e-12):
+        print('hi1')
         with Pool(numprocesses) as p:
-            result_tuple_pulls = p.map(partial(self._processOneRamp, ispull=True), pulls)
-            #result_tuple_releases = p.map(partial(self._processOneRamp, ispull=False), releases)
+            result_tuple_pulls = p.map(partial(self._processOneRamp, ispull=True), pulls, chunksize = 30)
+        print('hi')
+        with Pool(numprocesses) as p:   
+            result_tuple_releases = p.map(partial(self._processOneRamp, ispull=False), releases, chunksize = 30)
             
-        return result_tuple_pulls #, result_tuple_releases)
+        return (result_tuple_pulls , result_tuple_releases)
 
     def _processOneRamp(self, pull, ispull, numsdevs=3, force_threshold=3e-12):
         (steps_start, steps_end) = self._detectConfChange(pull[:,1], pull[:,0], pull=ispull, numsdevs=numsdevs, force_threshold=force_threshold, window=1000)
