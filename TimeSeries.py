@@ -18,7 +18,7 @@ from functools import partial
 import tqdm
 
 
-class TimeSeriesLoader():
+class TimeSeriesLoader(object):
     '''Provides data structures and methods to analyze single-molecule data.'''
 
     def __init__ (self):
@@ -249,7 +249,7 @@ class TimeSeriesLoader():
 
         return wave
 
-class Histogram3D():
+class Histogram3D(object):
     '''3D histogram from an x, y, z time series'''
 
     def __init__(self, timeseries, numbins, binsize):
@@ -265,7 +265,7 @@ class Histogram3D():
         bins_oneaxis = np.arange(start, end, binsize)
         bins = [bins_oneaxis, bins_oneaxis, bins_oneaxis]
         self.histo3D = np.histogramdd(sample=(timeseries[0], timeseries[1], timeseries[2]), bins=bins)
-        self._GlobalEnergyMinimum = np.array([0.0, 0.0, 0.0, 0.0]) #location and value -> N = 4
+        self.GlobalEnergyMinimum = np.array([0.0, 0.0, 0.0, 0.0]) #location and value -> N = 4
 
     def plotlyIsosurface(self, isomin, isomax, title):
         '''Return a plotly FigureWidget containing an isosurface representation of the 3D histogram
@@ -321,7 +321,7 @@ class Histogram3D():
         surfacepos = np.copy(surfaceposguess.astype(float))
         
         for index, pos in np.ndenumerate(surfaceposguess):
-            if(counts[index] > 500):
+            if(counts[index] > 100):
                 vals = histdata_rearr[index]
                 init = [surfacemaxguess[index], pos, surfacewidthguess[index]]
                 out = leastsq(errfunc, init, args=(hist_bin_centers, vals))
@@ -416,11 +416,6 @@ class Histogram3D():
                             dims = ['x', 'y', 'z'],
                             coords = {'x': hist_bin_centers, 'y': hist_bin_centers, 'z': hist_bin_centers})
 
-    @property
-    def GlobalEnergyMinimum(self):
-        '''Return the position of the most highly occupied point in the histogram. In the current implementation this is given in the coordinate system in which z is the pulling direction!
-        '''
-        return self._GlobalEnergyMinimum
 
     @property
     def SurfaceNormalAtGlobMinimum(self):
@@ -452,7 +447,7 @@ class Histogram3D():
 
         return surfnormal
 
-class Histogram2D():
+class Histogram2D(object):
     '''represents a 2D histogram constructed from two time series'''
 
     def __init__(self, wave1, wave2, delta1, delta2, min1=None, max1=None, min2=None, max2=None):
@@ -581,7 +576,8 @@ class ForceRampHandler(object):
             layout (holoviews/matplotlib): layout of cycles.
         '''
         hv.extension('matplotlib')
-        all_cycles = hv.Layout()
+        #all_cycles = hv.Layout()
+        all_cycles_dict = OrderedDict()
         for cyclenum in np.arange(start, stop):
             pull = self.pullsXr[cyclenum]
             release = self.releasesXr[cyclenum]
@@ -600,8 +596,9 @@ class ForceRampHandler(object):
             layout.opts(show_legend = False)
             #cyclelayout = hd.dynspread(hd.datashade(layout, aggregator=ds.count_cat('k'))).opts(xrotation=0, xlim=(0, 200e-9), ylim=(0, 70e-12), xformatter='%.1e',yformatter='%.1e',xlabel='extension (m)', ylabel='force (N)')
             cyclelayout = layout.opts(xlabel='extension (m)', ylabel='force (N)')
-            all_cycles += cyclelayout          
-
+            all_cycles_dict[str(cyclenum)] = cyclelayout          
+        
+        all_cycles = hv.Layout(all_cycles_dict, kdims='cycle')
         hd.shade.color_key=None #reset
         
         return all_cycles.cols(4)
@@ -654,28 +651,32 @@ class ForceRampHandler(object):
             
         return (result_tuple_pulls , result_tuple_releases)
 
-    def _processOneRamp(self, pull, ispull, numsdevs=3, force_threshold=3e-12):
+    def _processOneRamp(self, pull, ispull, numsdevs=4, force_threshold=3e-12):
         (steps_start, steps_end) = self._detectConfChange(pull[:,1], pull[:,0], pull=ispull, numsdevs=numsdevs, force_threshold=force_threshold, window=1000)
         segments = self._confChangeToSegments(steps_start, steps_end, pull[:,1], pull[:,0])
         lcs_one_pull = []
         lps_one_pull = []
         Ks_one_pull = []
         dLc_vs_F_one_pull = []
-        Fmaxs_one_pull = [] #maximum force at the end of each segment (i.e. the forces at which a rip happened)
+        F_extremes_one_pull = [] #maximum (minimum) force at the end of each segment for pulls (releases)  (i.e. the forces at which a rip happened)
+
         segfit_one_pull =[]
         for seg in segments:
-            (params, params_cov, seg_fit, fitfailed) = self._fitSeriesWLCs(seg, lps = [0.5e-9, 4e-9], lcs = [37e-9, 50e-9], Ks=[7.2e-3*37e-9, 7.2e-3*37e-9], holdconst= [True, False, True, False, True, False])
+            (params, params_cov, seg_fit, fitfailed) = self._fitSeriesWLCs(seg, lps = [0.5e-9, 4e-9], lcs = [37e-9, 50e-9], Ks=[7.2e-3*37e-9, 10e-3*44e-9], holdconst= [True, False, True, False, True, True])
             if (fitfailed): #curve fit failed
                 continue
             lcs_one_pull.append(params[3])
             lps_one_pull.append(params[1])
             Ks_one_pull.append(params[5])
-            Fmaxs_one_pull.append(np.max(seg.values))
+            if(ispull):
+                F_extremes_one_pull.append(np.max(seg.values))
+            else:
+                F_extremes_one_pull.append(np.min(seg.values))
             segfit_one_pull.append(seg_fit)
         if(len(lcs_one_pull) > 1):
             #conformational change detected
             dLcs = np.diff(lcs_one_pull)
-            for dLc, F in zip(dLcs, Fmaxs_one_pull):
+            for dLc, F in zip(dLcs, F_extremes_one_pull):
                 dLc_vs_F_one_pull.append([F, dLc])
         
         return (lcs_one_pull, lps_one_pull, Ks_one_pull, dLc_vs_F_one_pull, segfit_one_pull)
