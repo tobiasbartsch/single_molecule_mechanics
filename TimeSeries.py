@@ -603,6 +603,27 @@ class ForceRampHandler(object):
         
         return all_cycles.cols(4)
 
+    def getSegments(self, pullOrRelease, ispull, numsdevs=4, force_threshold=3e-12, window=1000):
+        '''determine the segments within one pull or relaxation'''
+        (steps_start, steps_end) = self._detectConfChange(pullOrRelease[:,1], pullOrRelease[:,0], pull=ispull, numsdevs=numsdevs, force_threshold=force_threshold, window=window)
+        segments = self._confChangeToSegments(steps_start, steps_end, pullOrRelease[:,1], pullOrRelease[:,0])
+        return segments
+    
+    def getAllSegments(self, numsdevs=4, force_threshold=3e-12, window=1000):
+        '''return all segments in the force ramp experiment. Returns two lists, one for the pulls and the other for relaxations.'''
+        segs_pulls = []
+        segs_releases = []
+        for pull in self.pulls:
+            segs_pulls.append(self.getSegments(pull, ispull=True, numsdevs=numsdevs, force_threshold=force_threshold, window=window))
+        for release in self.releases:
+            segs_releases.append(self.getSegments(release, ispull=False, numsdevs=numsdevs, force_threshold=force_threshold, window=window))
+
+        segs_pulls_flat = [seg for segs_cycle in segs_pulls for seg in segs_cycle]
+        segs_releases_flat = [seg for segs_cycle in segs_releases for seg in segs_cycle]
+
+        return (segs_pulls_flat, segs_releases_flat)
+
+
     def fitAllPullsWithWLCs(self, pulls, numsdevs=3, force_threshold=3e-12):
 
         lcs_all_pulls = []
@@ -662,7 +683,7 @@ class ForceRampHandler(object):
 
         segfit_one_pull =[]
         for seg in segments:
-            (params, params_cov, seg_fit, fitfailed) = self._fitSeriesWLCs(seg, lps = [0.5e-9, 4e-9], lcs = [37e-9, 50e-9], Ks=[7.2e-3*37e-9, 10e-3*44e-9], holdconst= [True, False, True, False, True, True])
+            (params, params_cov, seg_fit, fitfailed) = self._fitSeriesWLCs(seg, lps = [0.5e-9, 4e-9], lcs = [37e-9, 50e-9], Ks=[7.2e-3*37e-9, 10e-3*44e-9], holdconst= [True, False, True, False, True, False])
             if (fitfailed): #curve fit failed
                 continue
             lcs_one_pull.append(params[3])
