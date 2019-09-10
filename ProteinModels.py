@@ -22,16 +22,28 @@ def xWLCe(F, lp, lc, K):
 
     Args:
         lp (float): persistence length
-        lc (float): contour length
+        lc (float or np.array of floats): contour length (if an array is passed, the length of this array must be the same as dim 0 of the force matrix)
         K (float): enthalpic elastic modulus
-        F (float): force
+        F (float or np.array of floats): force (if an array is passed, this function attempts to compute an extension for each force)
     '''
 
     kBT = 4.0591066488e-21 #thermal energy at 70 Fahrenheit
 
-    x = lc * (4/3 - 4/(3 * np.sqrt(F*lp/kBT + 1)) - 10 * np.exp((900*kBT/(F*lp))**(1/4)) / (np.sqrt(F*lp/kBT) * ( np.exp((900*kBT/(F*lp))**(1/4)) - 1)**2 ) + (F*lp/kBT)**1.62 / (3.55 + 3.8 * (F*lp/kBT)**2.2) + F/K)
-    x[F == 0] = 0
-    return x
+    if(np.asarray([lc]).shape[0] == 1 and np.asarray([lp]).shape[0] == 1): 
+        #we were given one lc and one lp; just compute the extension for each entry in F
+        x = lc * (4/3 - 4/(3 * np.sqrt(F*lp/kBT + 1)) - 10 * np.exp((900*kBT/(F*lp))**(1/4)) / (np.sqrt(F*lp/kBT) * ( np.exp((900*kBT/(F*lp))**(1/4)) - 1)**2 ) + (F*lp/kBT)**1.62 / (3.55 + 3.8 * (F*lp/kBT)**2.2) + F/K)
+        np.array(x)[np.array(F) == 0] = 0
+        return x
+    elif(np.asarray([lc]).shape[0] > 1 and np.asarray([F]).shape[0] > np.asarray([lc]).shape[0] and np.asarray([lp]) == 1): 
+        #we were given several lcs, one for each row in F. Apply row wise.
+        x = []
+        for F_i, lc_i in zip(F,lc):
+            x_i = lc_i * (4/3 - 4/(3 * np.sqrt(F_i*lp/kBT + 1)) - 10 * np.exp((900*kBT/(F_i*lp))**(1/4)) / (np.sqrt(F_i*lp/kBT) * ( np.exp((900*kBT/(F_i*lp))**(1/4)) - 1)**2 ) + (F_i*lp/kBT)**1.62 / (3.55 + 3.8 * (F_i*lp/kBT)**2.2) + F_i/K)
+            np.array(x_i)[np.array(F_i) == 0] = 0
+            x.append(x_i)
+        return np.array(x)
+    else:
+        raise NotImplementedError('Unsupported combination of dimensions in F, lc, and lp.')
 
 def xSeriesWLCe(F, lps, lcs, Ks):
     '''Extension-force relation for a series of WLCs,
