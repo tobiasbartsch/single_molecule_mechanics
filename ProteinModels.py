@@ -27,6 +27,9 @@ def xWLCe(F, lp, lc, K):
         F (float): force
     '''
 
+    if(F == 0):
+        return 0
+
     kBT = 4.0591066488e-21 #thermal energy at 70 Fahrenheit
 
     x = lc * (4/3 - 4/(3 * np.sqrt(F*lp/kBT + 1)) - 10 * np.exp((900*kBT/(F*lp))**(1/4)) / (np.sqrt(F*lp/kBT) * ( np.exp((900*kBT/(F*lp))**(1/4)) - 1)**2 ) + (F*lp/kBT)**1.62 / (3.55 + 3.8 * (F*lp/kBT)**2.2) + F/K)
