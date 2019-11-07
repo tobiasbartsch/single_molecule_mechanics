@@ -609,19 +609,31 @@ class ForceRampHandler(object):
         segments = self._confChangeToSegments(steps_start, steps_end, pullOrRelease[:,1], pullOrRelease[:,0])
         return segments
     
-    def getAllSegments(self, numsdevs=4, force_threshold=3e-12, window=1000):
+    def getAllSegments(self, numsdevs=4, force_threshold=3e-12, window=1000, cores=4):
         '''return all segments in the force ramp experiment. Returns two lists, one for the pulls and the other for relaxations.'''
-        segs_pulls = []
-        segs_releases = []
-        for pull in self.pulls:
-            segs_pulls.append(self.getSegments(pull, ispull=True, numsdevs=numsdevs, force_threshold=force_threshold, window=window))
-        for release in self.releases:
-            segs_releases.append(self.getSegments(release, ispull=False, numsdevs=numsdevs, force_threshold=force_threshold, window=window))
+        # segs_pulls = []
+        # segs_releases = []
 
-        segs_pulls_flat = [seg for segs_cycle in segs_pulls for seg in segs_cycle]
-        segs_releases_flat = [seg for segs_cycle in segs_releases for seg in segs_cycle]
+        pulls = self.pulls
+        releases = self.releases
 
-        return (segs_pulls_flat, segs_releases_flat)
+        print('processing pulls')
+        print('chunksize:', len(pulls)/cores)
+        with Pool(cores) as p:
+            segs_pulls = p.map(partial(self.getSegments, ispull=True, numsdevs=numsdevs, force_threshold=force_threshold, window=window), pulls, chunksize=np.floor(len(pulls)/cores))
+        print('processing releases')
+        print('chunksize:', len(releases)/cores)
+        with Pool(cores) as p:
+            segs_releases = p.map(partial(self.getSegments, ispull=False, numsdevs=numsdevs, force_threshold=force_threshold, window=window), releases, chunksize=np.floor(len(releases)/cores))
+        # for pull in self.pulls:
+        #     segs_pulls.append(self.getSegments(pull, ispull=True, numsdevs=numsdevs, force_threshold=force_threshold, window=window))
+        # for release in self.releases:
+        #     segs_releases.append(self.getSegments(release, ispull=False, numsdevs=numsdevs, force_threshold=force_threshold, window=window))
+
+        #segs_pulls_flat = [seg for segs_cycle in segs_pulls for seg in segs_cycle]
+        #segs_releases_flat = [seg for segs_cycle in segs_releases for seg in segs_cycle]
+
+        return (segs_pulls, segs_releases)
 
 
     def fitAllPullsWithWLCs(self, pulls, numsdevs=3, force_threshold=3e-12):
@@ -663,10 +675,10 @@ class ForceRampHandler(object):
         return (dLc_vs_F, lcs_all_pulls, lps_all_pulls, Ks_all_pulls, fit_pulls)
 
     def fitAllCyclesWithWLCs_parallel(self, pulls, releases, numprocesses = 10, numsdevs=3, force_threshold=3e-12):
-        print('hi1')
+        print('fitting pulls')
         with Pool(numprocesses) as p:
             result_tuple_pulls = p.map(partial(self._processOneRamp, ispull=True), pulls, chunksize = 30)
-        print('hi')
+        print('fitting releases')
         with Pool(numprocesses) as p:   
             result_tuple_releases = p.map(partial(self._processOneRamp, ispull=False), releases, chunksize = 30)
             
