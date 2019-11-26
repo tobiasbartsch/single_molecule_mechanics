@@ -3,20 +3,38 @@ import numpy as np
 import xarray as xr
 import nptdms
 import plotly.graph_objs as go
+import holoviews as hv
+import datashader as ds
+import warnings
+import tqdm
+import holoviews.operation.datashader as hd
+hd.shade.cmap=["lightblue", "darkblue"]
+
 from scipy.optimize import curve_fit, leastsq
 from scipy.stats import ttest_ind
 from scipy.signal import savgol_filter
-import holoviews as hv
-import holoviews.operation.datashader as hd
-hd.shade.cmap=["lightblue", "darkblue"]
-import datashader as ds
-from single_molecule_mechanics.ProteinModels import xSeriesWLCe
-import warnings
 from collections import OrderedDict 
 from multiprocessing import Pool
 from functools import partial 
-import tqdm
+from pyspark import SparkContext, SparkConf
+from pyspark.sql import SQLContext
+#from single_molecule_mechanics.ProteinModels import xSeriesWLCe
+from . ProteinModels import xSeriesWLCe
+from collections import OrderedDict 
+from multiprocessing import Pool
+from functools import partial 
 
+#create a spark context
+conf = SparkConf().setAppName("App")
+conf = (conf.setMaster('local[*]')
+        .set('spark.executor.memory', '2G')
+        .set('spark.driver.memory', '8G')
+        .set('spark.driver.maxResultSize', '15G'))
+sc = SparkContext(conf=conf)
+
+### NOTE: you will need to re-create this zip file every time you want to run this code. This is super annoying. We should look into using Dask instead of Spark. 
+print('NOTE: you will need to re-create this zip file every time you want to run this code. This is super annoying. We should look into using Dask instead of Spark.')
+sc.addPyFile("/home/tbartsch/source/repos/single_molecule_mechanics.zip") 
 
 class TimeSeriesLoader(object):
     '''Provides data structures and methods to analyze single-molecule data.'''
@@ -609,31 +627,37 @@ class ForceRampHandler(object):
         segments = self._confChangeToSegments(steps_start, steps_end, pullOrRelease[:,1], pullOrRelease[:,0])
         return segments
     
-    def getAllSegments(self, numsdevs=4, force_threshold=3e-12, window=1000, cores=4):
-        '''return all segments in the force ramp experiment. Returns two lists, one for the pulls and the other for relaxations.'''
-        # segs_pulls = []
-        # segs_releases = []
+    def getAllSegments(self, numsdevs=4, force_threshold=3e-12, window=1000):
+        '''return all segments in the force ramp experiment. Returns two lists, one for the pulls and the other for relaxations.
+        Use Dask for parallel processing'''
 
-        pulls = self.pulls
-        releases = self.releases
+        #create RDDs
+        print(len(self.pulls))
+        print(len(self.releases))
+        pulls_rdd = sc.parallelize(self.pulls, 8)
+        print('collecting results for pulls')
+        result_pulls = pulls_rdd.mapPartitions(partial(self._getSegmentsSpark,ispull=True, numsdevs=numsdevs, force_threshold=force_threshold, window=window)).collect()
+        pulls_rdd.unpersist()
 
-        print('processing pulls')
-        print('chunksize:', len(pulls)/cores)
-        with Pool(cores) as p:
-            segs_pulls = p.map(partial(self.getSegments, ispull=True, numsdevs=numsdevs, force_threshold=force_threshold, window=window), pulls, chunksize=np.floor(len(pulls)/cores))
-        print('processing releases')
-        print('chunksize:', len(releases)/cores)
-        with Pool(cores) as p:
-            segs_releases = p.map(partial(self.getSegments, ispull=False, numsdevs=numsdevs, force_threshold=force_threshold, window=window), releases, chunksize=np.floor(len(releases)/cores))
-        # for pull in self.pulls:
-        #     segs_pulls.append(self.getSegments(pull, ispull=True, numsdevs=numsdevs, force_threshold=force_threshold, window=window))
-        # for release in self.releases:
-        #     segs_releases.append(self.getSegments(release, ispull=False, numsdevs=numsdevs, force_threshold=force_threshold, window=window))
+        releases_rdd = sc.parallelize(self.releases, 8)
+        print('collecting results for releases')
+        result_releases = releases_rdd.mapPartitions(partial(self._getSegmentsSpark,ispull=False, numsdevs=numsdevs, force_threshold=force_threshold, window=window)).collect()
+        releases_rdd.unpersist()
 
-        #segs_pulls_flat = [seg for segs_cycle in segs_pulls for seg in segs_cycle]
-        #segs_releases_flat = [seg for segs_cycle in segs_releases for seg in segs_cycle]
+        segs_pulls = [item for sublist in result_pulls for item in sublist]
+        segs_releases = [item for sublist in result_releases for item in sublist]
 
         return (segs_pulls, segs_releases)
+
+    def _getSegmentsSpark(self, chunk_of_RDD, ispull=True, numsdevs=4, force_threshold=3e-12, window=1000):
+        '''return all segments in the spark RDD chunk.'''
+        
+        s = []
+        c = list(chunk_of_RDD)
+        for row in c:
+            r = np.array(row)
+            s.append(self.getSegments(row, ispull=ispull, numsdevs=numsdevs, force_threshold=force_threshold, window=window))
+        return s
 
 
     def fitAllPullsWithWLCs(self, pulls, numsdevs=3, force_threshold=3e-12):

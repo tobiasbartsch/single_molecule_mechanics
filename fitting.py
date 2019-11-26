@@ -1,6 +1,6 @@
 import pymc3 as pm
 import numpy as np
-from single_molecule_mechanics.ProteinModels import xWLCe
+from . ProteinModels import xWLCe
 
 
 
