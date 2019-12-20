@@ -707,11 +707,11 @@ class ForceRampHandler(object):
         '''Runs a statistical test to determine conformational changes in the extension wave. Only considers data for which the force is larger than force_threshold.
 
             Args:
-                forcewave (np.array): force time trace
-                extensionwave (np.array): extension time trace
+                forcewave (np.array): force time trace.
+                extensionwave (np.array): extension time trace.
                 pull (boolean): Is the provided data a pull or a relaxation?
-                numsdevs (int): identify events if they are this many number of sdevs above noise
-                force_threshold (float): threshold for the force: do not test data with a force smaller than this value 
+                numsdevs (int): identify events if they are this many number of sdevs above noise.
+                force_threshold (float): threshold for the force: do not test data with a force smaller than this value.
                 window (int): number of data points to consider for the statistical test.
         '''
         if(pull is False): #create waves with monotonically increasing force
