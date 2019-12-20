@@ -189,7 +189,7 @@ class TimeSeriesLoader(object):
                 'z': self._calibrateAndCorrect_Channel(self.zchannel, 2),})
 
     def load_dkdI(self, path_to_dkdI):
-        '''load the slopes of the stiffness-intensity curves for the 852nm laser
+        '''load the slopes of the stiffness-intensity curves for the 852nm laser.
 
         Args: 
             path_to_dkdI (string): path to 852_k_sens_dk_dI.csv.
